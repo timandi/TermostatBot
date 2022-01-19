@@ -1,0 +1,45 @@
+{
+	"folders": [
+		{
+			"path": "../../../../WORK/Arduino"
+		},
+		{
+			"name": "OTA_Telegram_test",
+			"path": "."
+		},
+		{
+			"path": "../200703-005031-arduino-webserver"
+		},
+		{
+			"path": "../200703-185523-arduino-blink"
+		},
+		{
+			"path": "../200720-074155-arduino-external-libs"
+		},
+		{
+			"path": "../200720-074234-arduino-internal-libs"
+		},
+		{
+			"path": "../IR-motion-servo"
+		},
+		{
+			"path": "../securityModule"
+		},
+		{
+			"name": "PsihoBot",
+			"path": "../PsihoBot"
+		},
+		{
+			"path": "../OTA_Telegram_blinds"
+		},
+		{
+			"name": "OTA_telegram_gas_lights",
+			"path": "../OTA_telegram_gas_lights"
+		},
+		{
+			"name": "OTA_message_telegram_test",
+			"path": "../OTA_message_telegram_test"
+		}
+	],
+	"settings": {}
+}
