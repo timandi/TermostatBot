@@ -6,7 +6,9 @@
  *===========================================================================**/
 
 // Libraries used in this project
+#include <Adafruit_Sensor.h>
 #include <ArduinoJson.h>
+#include <DHT.h>
 #include <ESPmDNS.h>
 #include <UniversalTelegramBot.h>
 #include <Update.h>
@@ -15,65 +17,53 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 
-// Define wifi credentials and a friendly host name
-const char *ssid = "SkyAndSand";
-const char *password = "sandalandala";
-const char *host = "jarvis";
+// Include configuration file
+#include "config.h"
+// #define WIFI_SSID "*********"
+// #define WIFI_PASS "*********"
+// #define HOST_NAME "termostat"
+// #define BOT_TOKEN "*********"
+// #define CHAT_ID "*********"
+// #define HEATING_PIN 25      // Output pin - relay
+// #define VENTILATION_PIN 26  // Output pin - relay
+// #define LIGHT_PIN 27        // Outout pin - relay
+// #define SPARE_PIN 33        // Outout pin - relay
+// #define BUTTON_PIN 32       // Input pin - button
+// #define TEMPERATURE_PIN 33  // Input pin - sensor
+// #define DHT_TYPE 22         // DHT22
+// #define BOT_REQUEST_DELAY   1000
+// #define SENSOR_CHECK_DELAY  200
 
-// Telegram Bot credentials
-#define BOTtoken "1307133693:AAF7Yxytc8eTF9SCDJM9Y6p8DGo_R6_KTtI"
-#define CHAT_ID "220204396"
+// Define wifi credentials
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASS;
 
-// Define input and output pins
-#define relayPin1 25  //output pin   - relay
-#define relayPin2 26  //output pin   - relay
-#define motionPin 27  //input  pin   - 5v (PIR)
-
-// Variable for storing the states
-int motionValue = 0;
-int lastValue = 0;
-bool lightState = false;
-bool alarmState = false;
-
-// Checks for new messages every 1 second.
-int botRequestDelay = 1000;
-unsigned long lastTimeBotRan;
-
-// Checks for motion every 200ms
-int sensorCheckDelay = 50;
-unsigned long lastSensorCheck;
-
-// Store the delay time between alerts and lights timer
-int messageDelay = 0;
-int lightsOnDelay = 0;
+// Store last bot action timestamp
+unsigned long last_bot_request;
+unsigned long last_sensor_check;
+float temperature;
+float humidity;
+int button_state = LOW;
+int last_button_state = LOW;
+int heating_state = LOW;
+int ventilation_state = LOW;
+int light_state = LOW;
+int spare_state = LOW;
 
 // Define objects
 WebServer server(80);
 WiFiClientSecure client;
-UniversalTelegramBot bot(BOTtoken, client);
+UniversalTelegramBot bot(BOT_TOKEN, client);
+DHT dht(TEMPERATURE_PIN, DHT_TYPE);
 
 // Store the webpage html and css code
 String style;
 String loginIndex;
 String serverIndex;
 
-// Callback function called when motion is detected
-void handleMotionDetected() {
-    // If alarm is enabled, send a warning message
-    if (messageDelay == 0 && alarmState == true) {
-        bot.sendMessage(CHAT_ID, "Motion Detected!!");
-        Serial.println("Alarm message sent");
-    }
-
-    // Either way, turn the lights on and set the cooldowns
-    digitalWrite(relayPin1, LOW);
-    Serial.println("Motion detected - Lights ON");
-    lightState = true;
-    lightsOnDelay = 60;
-    messageDelay = 5;
-}
-
-// Callback function called when a new message arrived
+//================================================================
+// Main callback function reached when a new message arrives
+//================================================================
 void handleNewMessages(int numNewMessages) {
     Serial.print("\n\n New Telegram message received: ");
 
@@ -90,84 +80,154 @@ void handleNewMessages(int numNewMessages) {
         Serial.println(text);
         text.toLowerCase();
 
-        // Inline buttons with callbacks when pressed will raise a callback_query message
-        if (bot.messages[i].type == "callback_query") {
-            if (text == "alarmoff") {
-                alarmState = false;
-                Serial.println("Alarm turned OFF");
-                bot.sendMessage(chat_id, "Alarm turned OFF", "");
-            }
-            if (text == "alarmon") {
-                alarmState = true;
-                Serial.println("Alarm turned ON");
-                bot.sendMessage(chat_id, "Alarm turned ON", "");
-            }
-            if (text == "lights0") {
-                digitalWrite(relayPin1, HIGH);
-                lightState = false;
-                Serial.println("Lights turned OFF");
-                bot.sendMessage(chat_id, "Lights turned OFF", "");
-            }
-            if (text == "lights1") {
-                digitalWrite(relayPin1, LOW);
-                lightState = true;
-                Serial.println("Lights turned ON");
-                bot.sendMessage(chat_id, "Lights turned ON", "");
-            }
+        // Handle commands
+        if (strstr("/start help hello", text.c_str())) {
+            String welcome =
+                "Welcome, " + from_name +
+                ".\n"
+                "Here is a list of commands that you can use:\n\n"
+                "/status : see the status of the controllers\n"
+                "/heating     : thermosrat controller\n"
+                "/ventilation : ventilation controller\n"
+                "/lights      : manually control the lights\n"
+                "/joke        : self explainatory, isn't it?\n";
+
+            String keyboardJson =
+                "["
+                "[\"/heating\", \"/ventilation\"],"
+                "[\"/status\"],"
+                "[\"/lights\"],"
+                "[\"/joke\"]"
+                "]";
+            bot.sendMessageWithReplyKeyboard(chat_id, welcome, "Markdown", keyboardJson, true);
+        }
+        if (strstr("timandi site cv", text.c_str())) {
+            String keyboardJson =
+                "[[{ \"text\" : \"Go to the website\", \"url\" : \"https://timandi.xyz\" }],"
+                "[{ \"text\" : \"Tell him I said Hi\", \"callback_data\" : \"Si el :))\" }]]";
+            bot.sendMessageWithInlineKeyboard(chat_id, "Choose from one of the following options", "", keyboardJson);
+        }
+        if (strstr("/status sts", text.c_str())) {
+            Serial.println("status 1");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are ";
+            menu += String(temperature);
+            menu +=
+                "°C. \n"
+                " The heating is ";
+            menu += heating_state ? "ON\n" : "OFF\n";
+            menu += "The ventilation is ";
+            menu += ventilation_state ? "ON\n" : "OFF\n";
+            menu += "The light is ";
+            menu += light_state ? "ON\n" : "OFF\n";
+            Serial.println("status 2");
+            String keyboardJson =
+                "["
+                "[\"/heating\", \"/ventilation\"],"
+                "[\"/status\"],"
+                "[\"/lights\"],"
+                "[\"/joke\"]"
+                "]";
+            Serial.println("status 3");
+            bot.sendMessageWithReplyKeyboard(chat_id, menu, "Markdown", keyboardJson, true);
+            Serial.println("status 4");
+        }
+        if (strstr("/heating centrala caldura", text.c_str())) {
+            String menu =
+                "This is the Heating control panel\n\n"
+                "Curently, there are ";
+            menu += String(temperature);
+            menu +=
+                "°C. \n"
+                " and the heating is ";
+            menu +=
+                heating_state
+                    ? "ON"
+                    : "OFF";
+            String keyboardJson =
+                "["
+                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/heating_on\" }],"
+                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/heating_off\" }]"
+                "]";
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
 
-        // Handle commands
-        else {
-            if (strstr("/start help hello", text.c_str())) {
-                String welcome =
-                    "Welcome, " + from_name +
-                    ".\n"
-                    "Here is a list of commands that you can use:\n\n"
-                    "/alarm  : returns the alarm controller\n"
-                    "/lights : manually control the lights\n"
-                    "/joke   : self explainatory, isn't it?\n";
+        if (strstr("/ventilation hota fan", text.c_str())) {
+            String menu =
+                "This is the ventilation control panel\n\n"
+                "Curently, the ventilation is ";
+            menu +=
+                heating_state
+                    ? "ON"
+                    : "OFF";
+            String keyboardJson =
+                "["
+                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/ventilation_on\" }],"
+                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/ventilation_off\" }]"
+                "]";
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+        }
 
-                String keyboardJson =
-                    "["
-                    "[\"/alarm\", \"/lights\"],"
-                    "[\"/joke\"]"
-                    "]";
-                bot.sendMessageWithReplyKeyboard(chat_id, welcome, "Markdown", keyboardJson, true);
-            }
-            if (strstr("timandi site cv", text.c_str())) {
-                String keyboardJson =
-                    "[[{ \"text\" : \"Go to the website\", \"url\" : \"https://timandi.xyz\" }],"
-                    "[{ \"text\" : \"Tell him I said Hi\", \"callback_data\" : \"Si el :))\" }]]";
-                bot.sendMessageWithInlineKeyboard(chat_id, "Choose from one of the following options", "", keyboardJson);
-            }
-            if (text == "/alarm") {
-                String alarmStateMessage = "Alarm is currently ";
-                if (alarmState == true) {
-                    alarmStateMessage += "ON";
-                } else {
-                    alarmStateMessage += "OFF";
-                }
-                String keyboardJson =
-                    "["
-                    "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"alarmON\" }],"
-                    "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"alarmOFF\" }]"
-                    "]";
-                bot.sendMessageWithInlineKeyboard(chat_id, alarmStateMessage, "", keyboardJson);
-            }
-            if (text == "/lights") {
-                String keyboardJson =
-                    "["
-                    "[{ \"text\" : \"ON\", \"callback_data\" : \"lights1\" }],"
-                    "[{ \"text\" : \"OFF\", \"callback_data\" : \"lights0\" }]"
-                    "]";
-                bot.sendMessageWithInlineKeyboard(chat_id, "Hallway lights", "", keyboardJson);
-            }
+        if (strstr("/light lumina bec", text.c_str())) {
+            String menu =
+                "This is the light control panel\n\n"
+                "Curently, the light is ";
+            menu +=
+                heating_state
+                    ? "ON"
+                    : "OFF";
+            String keyboardJson =
+                "["
+                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/light_on\" }],"
+                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/light_off\" }]"
+                "]";
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+        }
 
-            if (text == "/joke") {
-                bot.sendChatAction(chat_id, "typing");
-                delay(1000);
-                bot.sendMessage(chat_id, ":|", "");
-            }
+        if (text == "/heating_on") {
+            heating_state = HIGH;
+            digitalWrite(HEATING_PIN, HIGH);
+            Serial.println("---heating turned on---");
+            bot.sendMessage(chat_id, "Heating turned ON ", "");
+        }
+        if (text == "/heating_off") {
+            heating_state = LOW;
+            digitalWrite(HEATING_PIN, LOW);
+            Serial.println("---heating turned off---");
+            bot.sendMessage(chat_id, "Heating turned OFF", "");
+        }
+
+        if (text == "/ventilation_on") {
+            ventilation_state = HIGH;
+            digitalWrite(VENTILATION_PIN, HIGH);
+            Serial.println("---ventilation turned on---");
+            bot.sendMessage(chat_id, "ventilation turned ON ", "");
+        }
+        if (text == "/ventilation_off") {
+            ventilation_state = LOW;
+            digitalWrite(VENTILATION_PIN, LOW);
+            Serial.println("---ventilation turned off---");
+            bot.sendMessage(chat_id, "ventilation turned OFF", "");
+        }
+
+        if (text == "/light_on") {
+            light_state = HIGH;
+            digitalWrite(LIGHT_PIN, HIGH);
+            Serial.println("---light turned on---");
+            bot.sendMessage(chat_id, "light turned ON ", "");
+        }
+        if (text == "/light_off") {
+            light_state = LOW;
+            digitalWrite(LIGHT_PIN, LOW);
+            Serial.println("---light turned off---");
+            bot.sendMessage(chat_id, "light turned OFF", "");
+        }
+
+        if (text == "/joke") {
+            bot.sendChatAction(chat_id, "typing");
+            delay(1000);
+            bot.sendMessage(chat_id, ":|", "");
         }
     }
 }
@@ -187,7 +247,7 @@ void setupWifi() {
     // Login page
     loginIndex =
         "<form name=loginForm>"
-        "<h1>JARVIS Login</h1>"
+        "<h1>Login</h1>"
         "<input name=userid placeholder='User ID'> "
         "<input name=pwd placeholder=Password type=Password> "
         "<input type=submit onclick=check(this.form) class=btn value=Login></form>"
@@ -247,9 +307,15 @@ void setupWifi() {
         "</script>" +
         style;
 
+    // Additional SSL certificate
+    client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
+
+    // Attempt to connect to Wifi network:
+    Serial.print("Connecting to: ");
+    Serial.println(ssid);
+
     // Connect to WiFi network
     WiFi.begin(ssid, password);
-    client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
     Serial.println("");
 
     // Wait for connection
@@ -263,14 +329,14 @@ void setupWifi() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
 
-    // Use MDSN for a friendly hostname - http://jarvis.local
-    if (!MDNS.begin(host)) {
+    // Use MDSN for a friendly hostname - http://termostat.local
+    if (!MDNS.begin(HOST_NAME)) {
         Serial.println("Error setting up MDNS responder!");
         while (1) {
             delay(1000);
         }
     }
-    Serial.println("You can access the dashboard at http://jarvis.local");
+    Serial.println("You can access the dashboard at http://termostat.local");
 
     // Returns login page
     server.on("/", HTTP_GET, []() {
@@ -319,21 +385,32 @@ void setupWifi() {
                 }
             } });
     server.begin();
-    Serial.println("All good ;)");
+    Serial.println("WiFi connectiion successfull");
 }
 
 /**====================================
  *    SETUP function
  *===================================**/
 void setup(void) {
-    pinMode(relayPin1, OUTPUT);
-    pinMode(relayPin2, OUTPUT);
-    pinMode(motionPin, INPUT_PULLUP);
+    // Initialize the pins as outputs and pull them high
+    pinMode(HEATING_PIN, OUTPUT);
+    pinMode(VENTILATION_PIN, OUTPUT);
+    pinMode(LIGHT_PIN, OUTPUT);
+    pinMode(SPARE_PIN, OUTPUT);
 
-    digitalWrite(relayPin1, HIGH);
-    digitalWrite(relayPin2, HIGH);
+    digitalWrite(HEATING_PIN, heating_state);
+    digitalWrite(VENTILATION_PIN, ventilation_state);
+    digitalWrite(LIGHT_PIN, light_state);
+    digitalWrite(SPARE_PIN, spare_state);
 
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(TEMPERATURE_PIN, INPUT);
+
+    button_state = digitalRead(BUTTON_PIN);
+
+    // Start serial connection for debugging
     Serial.begin(115200);
+    dht.begin();
 
     setupWifi();
 }
@@ -344,46 +421,70 @@ void setup(void) {
 void loop(void) {
     server.handleClient();
 
-    if (millis() > lastTimeBotRan + botRequestDelay) {
+    if (millis() > last_bot_request + BOT_REQUEST_DELAY) {
         // Check for new messages
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
         while (numNewMessages) {
+            Serial.println("got response");
             handleNewMessages(numNewMessages);
             numNewMessages = bot.getUpdates(bot.last_message_received + 1);
         }
-        lastTimeBotRan = millis();
-
-        // Decrement the message cooldown
-        if (messageDelay) {
-            messageDelay--;
-        }
-
-        // Handle the lights cooldown
-        if (lightsOnDelay) {
-            lightsOnDelay--;
-            if (lightsOnDelay == 0) {
-                digitalWrite(relayPin1, HIGH);
-                lightState = false;
-                Serial.println("Lights OFF");
-            }
-        }
-        Serial.print(".");
+        last_bot_request = millis();
     }
 
-    if (millis() > lastSensorCheck + sensorCheckDelay) {
+    if (millis() > last_sensor_check + SENSOR_CHECK_DELAY) {
         // Motion sensor reading
-        motionValue = digitalRead(motionPin);
-        if (motionValue == HIGH) {
-            if (lastValue != HIGH) {
-                handleMotionDetected();
-                Serial.println("Motion Detected!");
-                lastValue = HIGH;
-            }
-        } else if (lastValue == HIGH) {
-            Serial.println("Motion Ended!");
-            lastValue = LOW;
+        last_button_state = button_state;
+        temperature = dht.readTemperature();
+        humidity = dht.readHumidity();
+        button_state = digitalRead(BUTTON_PIN);
+
+        Serial.print("Temperature: [");
+        Serial.print(temperature);
+        Serial.print("°C], [");
+        Serial.print(humidity);
+        Serial.print("%] hum");
+
+        Serial.print(" Fan button - ");
+        if (button_state) {
+            Serial.print("[ON]");
+        } else {
+            Serial.print("[OFF]");
         }
-        lastSensorCheck = millis();
+
+        Serial.print(" Heating: ");
+        if (heating_state) {
+            Serial.print("[ON]");
+        } else {
+            Serial.print("[OFF]");
+        }
+
+        Serial.print(" Ventilation: ");
+        if (ventilation_state) {
+            Serial.print("[ON]");
+        } else {
+            Serial.print("[OFF]");
+        }
+
+        Serial.print(" Light: ");
+        if (light_state) {
+            Serial.print("[ON]");
+        } else {
+            Serial.print("[OFF]");
+        }
+
+        Serial.print(" Spare: ");
+        if (spare_state) {
+            Serial.print("[ON]");
+        } else {
+            Serial.print("[OFF]");
+        }
+
+        if (last_button_state != button_state) {
+            Serial.println("---Button pressed---");
+        }
+        Serial.println("");
+        last_sensor_check = millis();
     }
 }
