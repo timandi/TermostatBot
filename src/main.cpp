@@ -43,12 +43,12 @@ unsigned long last_bot_request;
 unsigned long last_sensor_check;
 float temperature;
 float humidity;
-int button_state = LOW;
-int last_button_state = LOW;
-int heating_state = LOW;
-int ventilation_state = LOW;
-int light_state = LOW;
-int spare_state = LOW;
+int button_state = HIGH;
+int last_button_state = HIGH;
+int heating_state = HIGH;
+int ventilation_state = HIGH;
+int lights_state = HIGH;
+int spare_state = HIGH;
 
 // Define objects
 WebServer server(80);
@@ -81,75 +81,73 @@ void handleNewMessages(int numNewMessages) {
         text.toLowerCase();
 
         // Handle commands
-        if (strstr("/start help hello", text.c_str())) {
+        if (strstr("/start help hello salut", text.c_str())) {
             String welcome =
                 "Welcome, " + from_name +
-                ".\n"
+                "😎\n"
                 "Here is a list of commands that you can use:\n\n"
-                "/status : see the status of the controllers\n"
-                "/heating     : thermosrat controller\n"
+                "/status        : see the full status\n"
+                "/heating      : heating controller\n"
                 "/ventilation : ventilation controller\n"
-                "/lights      : manually control the lights\n"
-                "/joke        : self explainatory, isn't it?\n";
+                "/lights         : manually control the lights\n"
+                "/joke           : self explainatory, isn't it?\n";
 
+            String emojis = " 😎📊👀💡🔎🔍💢🚷🔥💨🚷❌✅🌡🚬💡🥂🔥🔥💨🌬🌪🤙🤙 ";
             String keyboardJson =
                 "["
-                "[\"/heating\", \"/ventilation\"],"
-                "[\"/status\"],"
-                "[\"/lights\"],"
-                "[\"/joke\"]"
+                "[\"🔍 Status\", \"💡 Lights\"],"
+                "[\"🔥 Heating\", \"🌪 Ventilation\"]"
                 "]";
-            bot.sendMessageWithReplyKeyboard(chat_id, welcome, "Markdown", keyboardJson, true);
+            bot.sendMessageWithReplyKeyboard(chat_id, welcome, "", keyboardJson);
         }
-        if (strstr("timandi site cv", text.c_str())) {
-            String keyboardJson =
-                "[[{ \"text\" : \"Go to the website\", \"url\" : \"https://timandi.xyz\" }],"
-                "[{ \"text\" : \"Tell him I said Hi\", \"callback_data\" : \"Si el :))\" }]]";
-            bot.sendMessageWithInlineKeyboard(chat_id, "Choose from one of the following options", "", keyboardJson);
-        }
-        if (strstr("/status sts", text.c_str())) {
-            Serial.println("status 1");
+
+        if (strstr("/status 🔍 status sts", text.c_str())) {
             String menu =
                 "Here's the status of all the controllers:\n\n"
-                "Curently, there are ";
+                "Curently, there are 🌡 ";
             menu += String(temperature);
             menu +=
-                "°C. \n"
-                " The heating is ";
-            menu += heating_state ? "ON\n" : "OFF\n";
-            menu += "The ventilation is ";
-            menu += ventilation_state ? "ON\n" : "OFF\n";
-            menu += "The light is ";
-            menu += light_state ? "ON\n" : "OFF\n";
-            Serial.println("status 2");
-            String keyboardJson =
-                "["
-                "[\"/heating\", \"/ventilation\"],"
-                "[\"/status\"],"
-                "[\"/lights\"],"
-                "[\"/joke\"]"
-                "]";
-            Serial.println("status 3");
-            bot.sendMessageWithReplyKeyboard(chat_id, menu, "Markdown", keyboardJson, true);
-            Serial.println("status 4");
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+            // bot.sendMessageWithReplyKeyboard(chat_id, menu, "Markdown", keyboardJson, true);
         }
-        if (strstr("/heating centrala caldura", text.c_str())) {
+        if (strstr("/heating 🔥 heating centrala caldura", text.c_str())) {
             String menu =
                 "This is the Heating control panel\n\n"
-                "Curently, there are ";
+                "Curently, there are 🌡";
             menu += String(temperature);
             menu +=
-                "°C. \n"
-                " and the heating is ";
+                "°C and the heating is ";
             menu +=
                 heating_state
-                    ? "ON"
-                    : "OFF";
+                    ? "✅ ON ✅"
+                    : "❌ OFF ❌";
             String keyboardJson =
-                "["
-                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/heating_on\" }],"
-                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/heating_off\" }]"
-                "]";
+                heating_state ? "["
+                                "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }]"
+                                "]"
+                              : "["
+                                "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }]"
+                                "]";
             bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
 
@@ -158,9 +156,9 @@ void handleNewMessages(int numNewMessages) {
                 "This is the ventilation control panel\n\n"
                 "Curently, the ventilation is ";
             menu +=
-                heating_state
-                    ? "ON"
-                    : "OFF";
+                ventilation_state
+                    ? "✅ ON ✅"
+                    : "❌ OFF ❌";
             String keyboardJson =
                 "["
                 "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/ventilation_on\" }],"
@@ -174,9 +172,9 @@ void handleNewMessages(int numNewMessages) {
                 "This is the light control panel\n\n"
                 "Curently, the light is ";
             menu +=
-                heating_state
-                    ? "ON"
-                    : "OFF";
+                !lights_state
+                    ? "✅ ON ✅"
+                    : "❌ OFF ❌";
             String keyboardJson =
                 "["
                 "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/light_on\" }],"
@@ -189,39 +187,189 @@ void handleNewMessages(int numNewMessages) {
             heating_state = HIGH;
             digitalWrite(HEATING_PIN, HIGH);
             Serial.println("---heating turned on---");
-            bot.sendMessage(chat_id, "Heating turned ON ", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
         if (text == "/heating_off") {
             heating_state = LOW;
             digitalWrite(HEATING_PIN, LOW);
             Serial.println("---heating turned off---");
-            bot.sendMessage(chat_id, "Heating turned OFF", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
 
         if (text == "/ventilation_on") {
             ventilation_state = HIGH;
             digitalWrite(VENTILATION_PIN, HIGH);
             Serial.println("---ventilation turned on---");
-            bot.sendMessage(chat_id, "ventilation turned ON ", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
         if (text == "/ventilation_off") {
             ventilation_state = LOW;
             digitalWrite(VENTILATION_PIN, LOW);
             Serial.println("---ventilation turned off---");
-            bot.sendMessage(chat_id, "ventilation turned OFF", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
 
-        if (text == "/light_on") {
-            light_state = HIGH;
-            digitalWrite(LIGHT_PIN, HIGH);
+        if (text == "/lights_on") {
+            lights_state = LOW;
+            digitalWrite(LIGHTS_PIN, LOW);
             Serial.println("---light turned on---");
-            bot.sendMessage(chat_id, "light turned ON ", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating OFF\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation OFF\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights OFF\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
-        if (text == "/light_off") {
-            light_state = LOW;
-            digitalWrite(LIGHT_PIN, LOW);
+        if (text == "/lights_off") {
+            lights_state = HIGH;
+            digitalWrite(LIGHTS_PIN, HIGH);
             Serial.println("---light turned off---");
-            bot.sendMessage(chat_id, "light turned OFF", "");
+            String menu =
+                "Here's the status of all the controllers:\n\n"
+                "Curently, there are 🌡 ";
+            menu += String(temperature);
+            menu +=
+                "°C.\n\n"
+                "🔥 The heating is ";
+            menu += heating_state ? "✅ ON ✅\n" : "OFF\n";
+            menu += "🌪 Ventilation is  ";
+            menu += ventilation_state ? "✅ ON ✅\n" : "OFF\n";
+            menu += "💡 The lights are ";
+            menu += !lights_state ? "✅ ON ✅\n" : "OFF\n";
+
+            String keyboardJson = "[";
+            keyboardJson +=
+                heating_state ? "[{ \"text\" : \"🔥 Turn the heating OFF\", \"callback_data\" : \"/heating_off\" }],"
+                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
+            keyboardJson +=
+                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation OFF\", \"callback_data\" : \"/ventilation_off\" }],"
+                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
+            keyboardJson +=
+                !lights_state ? "[{ \"text\" : \"💡 Turn the lights OFF\", \"callback_data\" : \"/lights_off\" }]"
+                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
+            keyboardJson += "]";
+
+            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
         }
 
         if (text == "/joke") {
@@ -395,12 +543,12 @@ void setup(void) {
     // Initialize the pins as outputs and pull them high
     pinMode(HEATING_PIN, OUTPUT);
     pinMode(VENTILATION_PIN, OUTPUT);
-    pinMode(LIGHT_PIN, OUTPUT);
+    pinMode(LIGHTS_PIN, OUTPUT);
     pinMode(SPARE_PIN, OUTPUT);
 
     digitalWrite(HEATING_PIN, heating_state);
     digitalWrite(VENTILATION_PIN, ventilation_state);
-    digitalWrite(LIGHT_PIN, light_state);
+    digitalWrite(LIGHTS_PIN, lights_state);
     digitalWrite(SPARE_PIN, spare_state);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -468,7 +616,7 @@ void loop(void) {
         }
 
         Serial.print(" Light: ");
-        if (light_state) {
+        if (!lights_state) {
             Serial.print("[ON]");
         } else {
             Serial.print("[OFF]");
