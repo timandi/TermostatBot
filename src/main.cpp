@@ -10,380 +10,112 @@
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <ESPmDNS.h>
-#include <UniversalTelegramBot.h>
+#include <PubSubClient.h>
 #include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 
-// Include configuration file
+// Include optimization for debugging
+// #define DEBUG
+#include "debug.h"
+
+// Include project configuration
 #include "config.h"
-// #define WIFI_SSID "*********"
-// #define WIFI_PASS "*********"
-// #define HOST_NAME "termostat"
-// #define BOT_TOKEN "*********"
-// #define CHAT_ID "*********"
-// #define HEATING_PIN 25      // Output pin - relay
-// #define VENTILATION_PIN 26  // Output pin - relay
-// #define LIGHT_PIN 27        // Outout pin - relay
-// #define SPARE_PIN 33        // Outout pin - relay
-// #define BUTTON_PIN 32       // Input pin - button
-// #define TEMPERATURE_PIN 33  // Input pin - sensor
-// #define DHT_TYPE 22         // DHT22
-// #define BOT_REQUEST_DELAY   1000
-// #define SENSOR_CHECK_DELAY  200
 
-// Define wifi credentials
-const char *ssid = WIFI_SSID;
-const char *password = WIFI_PASS;
+// Declare the mqtt address
+IPAddress mqttServer(192, 168, 0, 80);
 
-// Store last bot action timestamp
-unsigned long last_bot_request;
-unsigned long last_sensor_check;
-float temperature;
-float humidity;
-int button_state = HIGH;
-int last_button_state = HIGH;
-int heating_state = HIGH;
-int ventilation_state = HIGH;
-int lights_state = HIGH;
-int spare_state = HIGH;
-
-// Define objects
-WebServer server(80);
-WiFiClientSecure client;
-UniversalTelegramBot bot(BOT_TOKEN, client);
+// Declare the sensor object based on its type and pin
 DHT dht(TEMPERATURE_PIN, DHT_TYPE);
 
-// Store the webpage html and css code
+// Create a web server for OTA
+WebServer otaServer(80);
+WiFiClient httpClient;
+
+// Create MQTT client
+PubSubClient mqttClient(httpClient);
+
+// Declare a new JSON object containing three key-values pairs
+const size_t capacity = JSON_OBJECT_SIZE(3);
+DynamicJsonDocument doc(capacity);
+char payload[256];
+
+// Store the OTA html
 String style;
 String loginIndex;
 String serverIndex;
 
-//================================================================
-// Main callback function reached when a new message arrives
-//================================================================
-void handleNewMessages(int numNewMessages) {
-    Serial.print("\n\n New Telegram message received: ");
+// Store the state of the outputs
+bool heatingState = false;
+bool ventilationState = false;
+bool lightsState = false;
+bool spareOutputState = false;
+int buttonState;
+bool prevButtonState = false;
+float prevTemp = 0;
 
-    // Handle any number of messages in the queue
-    for (int i = 0; i < numNewMessages; i++) {
-        String chat_id = bot.messages[i].chat_id;
-        String text = bot.messages[i].text;
-        String from_name = bot.messages[i].from_name;
+// Counters for scheduler
+unsigned long time1 = 0;
+unsigned long time2 = 0;
 
-        if (from_name == "") {
-            from_name = "Guest";
-        }
+// Callback function called when receiveing a message
+//===================================================
+void callback(char *topic, byte *message, unsigned int length) {
+    DPRINTF("Message arrived on topic: ");
+    DPRINT(topic);
+    DPRINTF(". Message: ");
+    String messageTemp;
 
-        Serial.println(text);
-        text.toLowerCase();
+    // Compose the message
+    for (int i = 0; i < length; i++) {
+        messageTemp += (char)message[i];
+    }
+    DPRINTLN(messageTemp);
 
-        // Handle commands
-        if (strstr("/start help hello salut", text.c_str())) {
-            String welcome =
-                "Welcome, " + from_name +
-                "😎\n"
-                "Here is a list of commands that you can use:\n\n"
-                "/status        : see the full status\n"
-                "/heating      : heating controller\n"
-                "/ventilation : ventilation controller\n"
-                "/lights         : manually control the lights\n"
-                "/joke           : self explainatory, isn't it?\n";
-
-            String emojis = " 😎📊👀💡🔎🔍💢🚷🔥💨🚷❌✅🌡🚬💡🥂🔥🔥💨🌬🌪🤙🤙 ";
-            String keyboardJson =
-                "["
-                "[\"🔍 Status\", \"💡 Lights\"],"
-                "[\"🔥 Heating\", \"🌪 Ventilation\"]"
-                "]";
-            bot.sendMessageWithReplyKeyboard(chat_id, welcome, "", keyboardJson);
-        }
-
-        if (strstr("/status 🔍 status sts", text.c_str())) {
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-            // bot.sendMessageWithReplyKeyboard(chat_id, menu, "Markdown", keyboardJson, true);
-        }
-        if (strstr("/heating 🔥 heating centrala caldura", text.c_str())) {
-            String menu =
-                "This is the Heating control panel\n\n"
-                "Curently, there are 🌡";
-            menu += String(temperature);
-            menu +=
-                "°C and the heating is ";
-            menu +=
-                heating_state
-                    ? "✅ ON ✅"
-                    : "❌ OFF ❌";
-            String keyboardJson =
-                heating_state ? "["
-                                "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }]"
-                                "]"
-                              : "["
-                                "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }]"
-                                "]";
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-        }
-
-        if (strstr("/ventilation hota fan", text.c_str())) {
-            String menu =
-                "This is the ventilation control panel\n\n"
-                "Curently, the ventilation is ";
-            menu +=
-                ventilation_state
-                    ? "✅ ON ✅"
-                    : "❌ OFF ❌";
-            String keyboardJson =
-                "["
-                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/ventilation_on\" }],"
-                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/ventilation_off\" }]"
-                "]";
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-        }
-
-        if (strstr("/light lumina bec", text.c_str())) {
-            String menu =
-                "This is the light control panel\n\n"
-                "Curently, the light is ";
-            menu +=
-                !lights_state
-                    ? "✅ ON ✅"
-                    : "❌ OFF ❌";
-            String keyboardJson =
-                "["
-                "[{ \"text\" : \"Turn ON\", \"callback_data\" : \"/light_on\" }],"
-                "[{ \"text\" : \"Turn OFF\", \"callback_data\" : \"/light_off\" }]"
-                "]";
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-        }
-
-        if (text == "/heating_on") {
-            heating_state = HIGH;
-            digitalWrite(HEATING_PIN, HIGH);
-            Serial.println("---heating turned on---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-        }
-        if (text == "/heating_off") {
-            heating_state = LOW;
+    if (String(topic) == "jarvis/heating") {
+        if (messageTemp == "on") {
             digitalWrite(HEATING_PIN, LOW);
-            Serial.println("---heating turned off---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+            heatingState = true;
+            DPRINTLNF("Heating turned on");
         }
-
-        if (text == "/ventilation_on") {
-            ventilation_state = HIGH;
-            digitalWrite(VENTILATION_PIN, HIGH);
-            Serial.println("---ventilation turned on---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+        if (messageTemp == "off") {
+            digitalWrite(HEATING_PIN, HIGH);
+            heatingState = false;
+            DPRINTLNF("Heating turned off");
         }
-        if (text == "/ventilation_off") {
-            ventilation_state = LOW;
+    }
+    if (String(topic) == "jarvis/ventilation") {
+        if (messageTemp == "on") {
             digitalWrite(VENTILATION_PIN, LOW);
-            Serial.println("---ventilation turned off---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating ❌ OFF ❌\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation ❌ OFF ❌\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights ❌ OFF ❌\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+            ventilationState = true;
+            DPRINTLNF("Ventilation turned on");
         }
-
-        if (text == "/lights_on") {
-            lights_state = LOW;
+        if (messageTemp == "off") {
+            digitalWrite(VENTILATION_PIN, HIGH);
+            ventilationState = false;
+            DPRINTLNF("Ventilation turned off");
+        }
+    }
+    if (String(topic) == "jarvis/lights") {
+        if (messageTemp == "on") {
             digitalWrite(LIGHTS_PIN, LOW);
-            Serial.println("---light turned on---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "❌ OFF ❌\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating OFF\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation OFF\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights OFF\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
+            lightsState = true;
+            DPRINTLNF("Lights turned on");
         }
-        if (text == "/lights_off") {
-            lights_state = HIGH;
+        if (messageTemp == "off") {
             digitalWrite(LIGHTS_PIN, HIGH);
-            Serial.println("---light turned off---");
-            String menu =
-                "Here's the status of all the controllers:\n\n"
-                "Curently, there are 🌡 ";
-            menu += String(temperature);
-            menu +=
-                "°C.\n\n"
-                "🔥 The heating is ";
-            menu += heating_state ? "✅ ON ✅\n" : "OFF\n";
-            menu += "🌪 Ventilation is  ";
-            menu += ventilation_state ? "✅ ON ✅\n" : "OFF\n";
-            menu += "💡 The lights are ";
-            menu += !lights_state ? "✅ ON ✅\n" : "OFF\n";
-
-            String keyboardJson = "[";
-            keyboardJson +=
-                heating_state ? "[{ \"text\" : \"🔥 Turn the heating OFF\", \"callback_data\" : \"/heating_off\" }],"
-                              : "[{ \"text\" : \"🔥 Turn the heating ✅ ON ✅\", \"callback_data\" : \"/heating_on\" }],";
-            keyboardJson +=
-                ventilation_state ? "[{ \"text\" : \"🌪 Turn the ventilation OFF\", \"callback_data\" : \"/ventilation_off\" }],"
-                                  : "[{ \"text\" : \"🌪 Turn the ventilation ✅ ON ✅\", \"callback_data\" : \"/ventilation_on\" }],";
-            keyboardJson +=
-                !lights_state ? "[{ \"text\" : \"💡 Turn the lights OFF\", \"callback_data\" : \"/lights_off\" }]"
-                              : "[{ \"text\" : \"💡 Turn the lights ✅ ON ✅\", \"callback_data\" : \"/lights_on\" }]";
-            keyboardJson += "]";
-
-            bot.sendMessageWithInlineKeyboard(chat_id, menu, "", keyboardJson);
-        }
-
-        if (text == "/joke") {
-            bot.sendChatAction(chat_id, "typing");
-            delay(1000);
-            bot.sendMessage(chat_id, ":|", "");
+            lightsState = false;
+            DPRINTLNF("Lights turned off");
         }
     }
 }
+
 /**====================================
  *    WIFI & OTA setup function
  *===================================**/
 void setupWifi() {
-    // CSS style
     style =
         "<style>#file-input,input{width:100%;height:44px;border-radius:4px;margin:10px auto;font-size:15px}"
         "input{background:#f1f1f1;border:0;padding:0 15px}body{background:#3498db;font-family:sans-serif;font-size:14px;color:#777}"
@@ -455,56 +187,57 @@ void setupWifi() {
         "</script>" +
         style;
 
-    // Additional SSL certificate
-    client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
-
     // Attempt to connect to Wifi network:
-    Serial.print("Connecting to: ");
-    Serial.println(ssid);
+    DPRINTF("Connecting to: ");
+    DPRINTLN(WIFI_SSID);
 
     // Connect to WiFi network
-    WiFi.begin(ssid, password);
-    Serial.println("");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    DPRINTLN("");
 
     // Wait for connection
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
-        Serial.print(".");
+        DPRINT(".");
     }
-    Serial.println("");
-    Serial.print("Connected to ");
-    Serial.println(ssid);
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    DPRINTLN("");
+    DPRINTF("Connected to ");
+    DPRINTLN(WIFI_SSID);
+    DPRINTF("IP address: ");
+    DPRINTLN(WiFi.localIP());
 
-    // Use MDSN for a friendly hostname - http://termostat.local
+    // Once online, connect to the mqtt server
+    mqttClient.setServer(mqttServer, 1883);
+
+    // Declare the callback function
+    mqttClient.setCallback(callback);
+
+    // Use MDSN for a friendly hostname - http://jarvis.local
     if (!MDNS.begin(HOST_NAME)) {
-        Serial.println("Error setting up MDNS responder!");
+        DPRINTLNF("Error setting up MDNS responder!");
         while (1) {
             delay(1000);
         }
     }
-    Serial.println("You can access the dashboard at http://termostat.local");
-
     // Returns login page
-    server.on("/", HTTP_GET, []() {
-        server.sendHeader("Connection", "close");
-        server.send(200, "text/html", loginIndex);
+    otaServer.on("/", HTTP_GET, []() {
+        otaServer.sendHeader("Connection", "close");
+        otaServer.send(200, "text/html", loginIndex);
     });
 
     // Returns server page
-    server.on("/serverIndex", HTTP_GET, []() {
-        server.sendHeader("Connection", "close");
-        server.send(200, "text/html", serverIndex);
+    otaServer.on("/serverIndex", HTTP_GET, []() {
+        otaServer.sendHeader("Connection", "close");
+        otaServer.send(200, "text/html", serverIndex);
     });
 
     // Handle upload of new firmware
-    server.on(
+    otaServer.on(
         "/update", HTTP_POST, []() {
-        server.sendHeader("Connection", "close");
-        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+        otaServer.sendHeader("Connection", "close");
+        otaServer.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         ESP.restart(); }, []() {
-            HTTPUpload& upload = server.upload();
+            HTTPUpload& upload = otaServer.upload();
             if (upload.status == UPLOAD_FILE_START) 
             {
                 Serial.printf("Update: %s\n", upload.filename.c_str());
@@ -532,107 +265,115 @@ void setupWifi() {
                     Update.printError(Serial);
                 }
             } });
-    server.begin();
-    Serial.println("WiFi connectiion successfull");
+    otaServer.begin();
+
+    DPRINTLNF("OTA update server started. ");
+    DPRINTLNF("It can be accessed at http://kitchen.local\n");
 }
 
+// Called once every SENSOR_CHECK_DELAY
+void handleSensorReadings() {
+    // DHT sensor reading
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+    float heatIndex = dht.computeHeatIndex(temperature, humidity, false);
+
+    // Validate readings
+    if (isnan(temperature) || isnan(humidity)) {
+        DPRINTLNF("Failed to read from DHT sensor!");
+        return;
+    }
+
+    DPRINTF("Temperature: ");
+    DPRINT(temperature);
+    DPRINTF("°C, humidity: ");
+    DPRINTLN(humidity);
+    DPRINTLN("%.");
+
+    // Act only on changes
+    if (temperature != prevTemp) {
+        doc["celsius"] = temperature;
+        doc["humidity"] = humidity;
+        doc["index"] = heatIndex;
+        serializeJson(doc, payload);
+        mqttClient.publish("jarvis/temperature", payload);
+        DPRINTLNF("Published on jarvis/temperature");
+    }
+}
+
+// Reconnect function to keep the mqtt server running
+void reconnect() {
+    // Loop until we're reconnected
+    while (!mqttClient.connected()) {
+        DPRINTF("Attempting MQTT connection...");
+        // Attempt to connect
+        if (mqttClient.connect(MQTT_HOST, MQTT_USER, MQTT_PASS)) {
+            DPRINTLNF("connected");
+            // Subscribe
+            mqttClient.subscribe("jarvis/heating");
+            mqttClient.subscribe("jarvis/ventilation");
+            mqttClient.subscribe("jarvis/lights");
+        } else {
+            DPRINTF("failed, rc=");
+            DPRINT(mqttClient.state());
+            DPRINTLNF(" try again in 5 seconds");
+            // Wait 5 seconds before retrying
+            delay(5000);
+        }
+    }
+}
 /**====================================
  *    SETUP function
  *===================================**/
-void setup(void) {
+void setup() {
+    // Print basic info about the firmware, handy on first sight
+    Serial.println(F("=============================================\n"));
+    Serial.println(F("Kitchen Controller - OTA Server - MQTT client"));
+    Serial.println(F("03.feb.2022"));
+    Serial.println(F("https://github.com/timandi/TermostatBot\n\n"));
+
     // Initialize the pins as outputs and pull them high
     pinMode(HEATING_PIN, OUTPUT);
     pinMode(VENTILATION_PIN, OUTPUT);
     pinMode(LIGHTS_PIN, OUTPUT);
     pinMode(SPARE_PIN, OUTPUT);
 
-    digitalWrite(HEATING_PIN, heating_state);
-    digitalWrite(VENTILATION_PIN, ventilation_state);
-    digitalWrite(LIGHTS_PIN, lights_state);
-    digitalWrite(SPARE_PIN, spare_state);
+    digitalWrite(HEATING_PIN, HIGH);
+    digitalWrite(VENTILATION_PIN, HIGH);
+    digitalWrite(LIGHTS_PIN, HIGH);
+    digitalWrite(SPARE_PIN, HIGH);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(TEMPERATURE_PIN, INPUT);
 
-    button_state = digitalRead(BUTTON_PIN);
+    buttonState = digitalRead(BUTTON_PIN);
 
-    // Start serial connection for debugging
+    // Start serial communication
     Serial.begin(115200);
-    dht.begin();
 
+    // Call the full wifi setup
     setupWifi();
+
+    // Start the DHT server
+    dht.begin();
+    DPRINTLNF("DHT sensor started");
 }
 
 /**====================================
  *    LOOP function
  *===================================**/
 void loop(void) {
-    server.handleClient();
-
-    if (millis() > last_bot_request + BOT_REQUEST_DELAY) {
-        // Check for new messages
-        int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-
-        while (numNewMessages) {
-            Serial.println("got response");
-            handleNewMessages(numNewMessages);
-            numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    if (millis() >= time1 + KEEP_ALIVE) {
+        time1 += KEEP_ALIVE;
+        if (!mqttClient.connected()) {
+            reconnect();
         }
-        last_bot_request = millis();
+        mqttClient.loop();
     }
-
-    if (millis() > last_sensor_check + SENSOR_CHECK_DELAY) {
-        // Motion sensor reading
-        last_button_state = button_state;
-        temperature = dht.readTemperature();
-        humidity = dht.readHumidity();
-        button_state = digitalRead(BUTTON_PIN);
-
-        Serial.print("Temperature: [");
-        Serial.print(temperature);
-        Serial.print("°C], [");
-        Serial.print(humidity);
-        Serial.print("%] hum");
-
-        Serial.print(" Fan button - ");
-        if (button_state) {
-            Serial.print("[ON]");
-        } else {
-            Serial.print("[OFF]");
-        }
-
-        Serial.print(" Heating: ");
-        if (heating_state) {
-            Serial.print("[ON]");
-        } else {
-            Serial.print("[OFF]");
-        }
-
-        Serial.print(" Ventilation: ");
-        if (ventilation_state) {
-            Serial.print("[ON]");
-        } else {
-            Serial.print("[OFF]");
-        }
-
-        Serial.print(" Light: ");
-        if (!lights_state) {
-            Serial.print("[ON]");
-        } else {
-            Serial.print("[OFF]");
-        }
-
-        Serial.print(" Spare: ");
-        if (spare_state) {
-            Serial.print("[ON]");
-        } else {
-            Serial.print("[OFF]");
-        }
-
-        if (last_button_state != button_state) {
-            Serial.println("---Button pressed---");
-        }
-        Serial.println("");
-        last_sensor_check = millis();
+    if (millis() >= time2 + SENSOR_CHECK_DELAY) {
+        time2 += SENSOR_CHECK_DELAY;
+        handleSensorReadings();
     }
+    // Handle possible http cpnnections
+    otaServer.handleClient();
 }
