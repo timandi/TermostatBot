@@ -15,17 +15,17 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <WiFiClientSecure.h>
 
+#include "wifi_setup.h"
 // Include optimization for debugging
-// #define DEBUG
+#define DEBUG
 #include "debug.h"
 
 // Include project configuration
 #include "config.h"
 
 // Declare the mqtt address
-IPAddress mqttServer(192, 168, 0, 80);
+// IPAddress mqttServer(192, 168, 0, 80);
 
 // Declare the sensor object based on its type and pin
 DHT dht(TEMPERATURE_PIN, DHT_TYPE);
@@ -41,11 +41,6 @@ PubSubClient mqttClient(httpClient);
 const size_t capacity = JSON_OBJECT_SIZE(3);
 DynamicJsonDocument doc(capacity);
 char payload[256];
-
-// Store the OTA html
-String style;
-String loginIndex;
-String serverIndex;
 
 // Store the state of the outputs
 bool heatingState = false;
@@ -116,81 +111,13 @@ void callback(char *topic, byte *message, unsigned int length) {
  *    WIFI & OTA setup function
  *===================================**/
 void setupWifi() {
-    style =
-        "<style>#file-input,input{width:100%;height:44px;border-radius:4px;margin:10px auto;font-size:15px}"
-        "input{background:#f1f1f1;border:0;padding:0 15px}body{background:#3498db;font-family:sans-serif;font-size:14px;color:#777}"
-        "#file-input{padding:0;border:1px solid #ddd;line-height:44px;text-align:left;display:block;cursor:pointer}"
-        "#bar,#prgbar{background-color:#f1f1f1;border-radius:10px}#bar{background-color:#3498db;width:0%;height:10px}"
-        "form{background:#fff;max-width:258px;margin:75px auto;padding:30px;border-radius:5px;text-align:center}"
-        ".btn{background:#3498db;color:#fff;cursor:pointer}</style>";
-
-    // Login page
-    loginIndex =
-        "<form name=loginForm>"
-        "<h1>Login</h1>"
-        "<input name=userid placeholder='User ID'> "
-        "<input name=pwd placeholder=Password type=Password> "
-        "<input type=submit onclick=check(this.form) class=btn value=Login></form>"
-        "<script>"
-        "function check(form) {"
-        "if(form.userid.value=='admin' && form.pwd.value=='admin')"
-        "{window.open('/serverIndex')}"
-        "else"
-        "{alert('Error Password or Username')}"
-        "}"
-        "</script>" +
-        style;
-
-    // Update page
-    serverIndex =
-        "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-        "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-        "<input type='file' name='update' id='file' onchange='sub(this)' style=display:none>"
-        "<label id='file-input' for='file'>   Choose file...</label>"
-        "<input type='submit' class=btn value='Update'>"
-        "<br><br>"
-        "<div id='prg'></div>"
-        "<br><div id='prgbar'><div id='bar'></div></div><br></form>"
-        "<script>"
-        "function sub(obj){"
-        "var fileName = obj.value.split('\\\\');"
-        "document.getElementById('file-input').innerHTML = '   '+ fileName[fileName.length-1];"
-        "};"
-        "$('form').submit(function(e){"
-        "e.preventDefault();"
-        "var form = $('#upload_form')[0];"
-        "var data = new FormData(form);"
-        "$.ajax({"
-        "url: '/update',"
-        "type: 'POST',"
-        "data: data,"
-        "contentType: false,"
-        "processData:false,"
-        "xhr: function() {"
-        "var xhr = new window.XMLHttpRequest();"
-        "xhr.upload.addEventListener('progress', function(evt) {"
-        "if (evt.lengthComputable) {"
-        "var per = evt.loaded / evt.total;"
-        "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-        "$('#bar').css('width',Math.round(per*100) + '%');"
-        "}"
-        "}, false);"
-        "return xhr;"
-        "},"
-        "success:function(d, s) {"
-        "console.log('success!') "
-        "},"
-        "error: function (a, b, c) {"
-        "}"
-        "});"
-        "});"
-        "</script>" +
-        style;
-
     // Attempt to connect to Wifi network:
     DPRINTF("Connecting to: ");
     DPRINTLN(WIFI_SSID);
 
+    const char *hostName = HOST_NAME;
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+    WiFi.setHostname(hostName);  //define hostname
     // Connect to WiFi network
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     DPRINTLN("");
@@ -207,13 +134,14 @@ void setupWifi() {
     DPRINTLN(WiFi.localIP());
 
     // Once online, connect to the mqtt server
+    const char *mqttServer = MQTT_SERVER;
     mqttClient.setServer(mqttServer, 1883);
 
     // Declare the callback function
     mqttClient.setCallback(callback);
 
-    // Use MDSN for a friendly hostname - http://jarvis.local
-    if (!MDNS.begin(HOST_NAME)) {
+    // Use MDSN for a friendly hostname - http://termostat.local
+    if (!MDNS.begin(hostName)) {
         DPRINTLNF("Error setting up MDNS responder!");
         while (1) {
             delay(1000);
@@ -238,30 +166,23 @@ void setupWifi() {
         otaServer.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         ESP.restart(); }, []() {
             HTTPUpload& upload = otaServer.upload();
-            if (upload.status == UPLOAD_FILE_START) 
-            {
+            if (upload.status == UPLOAD_FILE_START) {
                 Serial.printf("Update: %s\n", upload.filename.c_str());
-                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) 
-                { 
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { 
                     Update.printError(Serial);
                 }
             } 
-            else if (upload.status == UPLOAD_FILE_WRITE) 
-            {
+            else if (upload.status == UPLOAD_FILE_WRITE) {
                 // Flashing firmware to ESP
-                if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) 
-                {
+                if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                     Update.printError(Serial);
                 }
             } 
-            else if (upload.status == UPLOAD_FILE_END) 
-            {
-                if (Update.end(true)) 
-                { 
+            else if (upload.status == UPLOAD_FILE_END) {
+                if (Update.end(true)) { 
                     Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
                 } 
-                else 
-                {
+                else {
                     Update.printError(Serial);
                 }
             } });
@@ -280,25 +201,22 @@ void handleSensorReadings() {
 
     // Validate readings
     if (isnan(temperature) || isnan(humidity)) {
-        DPRINTLNF("Failed to read from DHT sensor!");
+        DPRINTLNF("Failed to read the temperature sensor!");
         return;
     }
 
     DPRINTF("Temperature: ");
     DPRINT(temperature);
     DPRINTF("°C, humidity: ");
-    DPRINTLN(humidity);
+    DPRINT(humidity);
     DPRINTLN("%.");
 
-    // Act only on changes
-    if (temperature != prevTemp) {
-        doc["celsius"] = temperature;
-        doc["humidity"] = humidity;
-        doc["index"] = heatIndex;
-        serializeJson(doc, payload);
-        mqttClient.publish("jarvis/temperature", payload);
-        DPRINTLNF("Published on jarvis/temperature");
-    }
+    doc["temperature"] = temperature;
+    doc["humidity"] = humidity;
+    doc["index"] = heatIndex;
+    serializeJson(doc, payload);
+    mqttClient.publish("jarvis/temperature", payload);
+    DPRINTLNF("Published on jarvis/temperature");
 }
 
 // Reconnect function to keep the mqtt server running
@@ -328,7 +246,7 @@ void reconnect() {
 void setup() {
     // Print basic info about the firmware, handy on first sight
     Serial.println(F("=============================================\n"));
-    Serial.println(F("Kitchen Controller - OTA Server - MQTT client"));
+    Serial.println(F("Kitchen Controller - OTA Update Server - MQTT client"));
     Serial.println(F("03.feb.2022"));
     Serial.println(F("https://github.com/timandi/TermostatBot\n\n"));
 
@@ -365,6 +283,8 @@ void setup() {
 void loop(void) {
     if (millis() >= time1 + KEEP_ALIVE) {
         time1 += KEEP_ALIVE;
+
+        // Check the MQTT client connection
         if (!mqttClient.connected()) {
             reconnect();
         }
@@ -374,6 +294,6 @@ void loop(void) {
         time2 += SENSOR_CHECK_DELAY;
         handleSensorReadings();
     }
-    // Handle possible http cpnnections
+    // Handle possible http connections for OTA update
     otaServer.handleClient();
 }
