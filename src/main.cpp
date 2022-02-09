@@ -1,6 +1,6 @@
 /**============================================================================
  *                   JARVIS - Personal Home Assistant
- *           
+ *
  *      - OTA Updates
  *      - Telegram bot
  *===========================================================================**/
@@ -37,11 +37,6 @@ WiFiClient httpClient;
 // Create MQTT client
 PubSubClient mqttClient(httpClient);
 
-// Declare a new JSON object containing three key-values pairs
-const size_t capacity = JSON_OBJECT_SIZE(3);
-DynamicJsonDocument doc(capacity);
-char payload[256];
-
 // Store the state of the outputs
 bool heatingState = false;
 bool ventilationState = false;
@@ -54,6 +49,19 @@ float prevTemp = 0;
 // Counters for scheduler
 unsigned long time1 = 0;
 unsigned long time2 = 0;
+
+// Update the server status
+void updateServerStatus() {
+    // Declare a new JSON object containing three key-values pairs
+    const size_t capacity = JSON_OBJECT_SIZE(3);
+    DynamicJsonDocument doc(capacity);
+    char payload[256];
+    doc["heating"] = heatingState;
+    doc["ventilation"] = ventilationState;
+    doc["lights"] = lightsState;
+    serializeJson(doc, payload);
+    mqttClient.publish("jarvis/kitchen/status", payload);
+}
 
 // Callback function called when receiveing a message
 //===================================================
@@ -105,6 +113,9 @@ void callback(char *topic, byte *message, unsigned int length) {
             DPRINTLNF("Lights turned off");
         }
     }
+    if (String(topic) == "jarvis/kitchen/update") {
+        updateServerStatus();
+    }
 }
 
 /**====================================
@@ -117,10 +128,11 @@ void setupWifi() {
 
     const char *hostName = HOST_NAME;
     WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
-    WiFi.setHostname(hostName);  //define hostname
+    WiFi.setHostname(hostName);  // define hostname
     // Connect to WiFi network
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     DPRINTLN("");
+    delay(30);
 
     // Wait for connection
     while (WiFi.status() != WL_CONNECTED) {
@@ -211,6 +223,11 @@ void handleSensorReadings() {
     DPRINT(humidity);
     DPRINTLN("%.");
 
+    // Declare a new JSON object containing three key-values pairs
+    const size_t capacity = JSON_OBJECT_SIZE(3);
+    DynamicJsonDocument doc(capacity);
+    char payload[256];
+
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
     doc["index"] = heatIndex;
@@ -231,6 +248,7 @@ void reconnect() {
             mqttClient.subscribe("jarvis/heating");
             mqttClient.subscribe("jarvis/ventilation");
             mqttClient.subscribe("jarvis/lights");
+            mqttClient.subscribe("jarvis/kitchen/update");
         } else {
             DPRINTF("failed, rc=");
             DPRINT(mqttClient.state());
@@ -244,6 +262,9 @@ void reconnect() {
  *    SETUP function
  *===================================**/
 void setup() {
+    // Start serial communication
+    Serial.begin(115200);
+
     // Print basic info about the firmware, handy on first sight
     Serial.println(F("=============================================\n"));
     Serial.println(F("Kitchen Controller - OTA Update Server - MQTT client"));
@@ -266,15 +287,15 @@ void setup() {
 
     buttonState = digitalRead(BUTTON_PIN);
 
-    // Start serial communication
-    Serial.begin(115200);
-
     // Call the full wifi setup
     setupWifi();
 
     // Start the DHT server
     dht.begin();
     DPRINTLNF("DHT sensor started");
+
+    // Update server status
+    updateServerStatus();
 }
 
 /**====================================
